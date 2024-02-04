@@ -5,7 +5,7 @@ const sqlite3 = require('sqlite3').verbose();
 const fs = require('node:fs');
 const path = require('node:path');
 
-const BOT_TOKEN = 'YOUR TOKEN HERE';
+const BOT_TOKEN = 'TOKEN';
 
 const { Client, GatewayIntentBits, Collection, Events } = require('discord.js'); //Initializes the Discord bot
 const client = new Discord.Client({ 
@@ -70,6 +70,7 @@ client.on('ready', () => {
 
 const config = require('./config'); 
 
+//#region Command Interactions
 //Handles Command Interaction events.
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isCommand()) return;
@@ -85,14 +86,45 @@ client.on('interactionCreate', async (interaction) => {
     scrapeAndStoreCodes(client.channels.cache.get('1203485910604316733'), true, userMention);
     interaction.reply(`Checking for codes...`);
   }
+
+  if (commandName === 'latestcode') 
+  {
+    const codes = await getAllCodesFromDatabase();
+    
+    if (codes.length > 0) 
+    {
+      const latestCode = codes[0];
+      interaction.reply(`The latest code for Genshin Impact is: **${latestCode.code}** ${latestCode.description}`);
+  
+    } else 
+    {
+      interaction.reply(`There are currently no promo codes for Genshin Impact. Please check back later.`)
+    }
+    
+  }
+
+  if (commandName === 'activecodes') 
+  {
+    const codes = await getAllCodesFromDatabase();
+    const formattedCodes = codes.map(entry => `• **${entry.code}** ${entry.description}`).join('\n');
+
+    if (codes.length > 0) 
+    {
+      interaction.reply(`Here are all the currently active promo codes for Genshin Impact \n${formattedCodes}`);
+    } else 
+    {
+      interaction.reply(`There are currently no promo codes for Genshin Impact. Please check back later.`)
+    }
+   
+  }
 });
-
-
+//#endregion
 
 async function scrapeAndStoreCodes(channel, userPrompt, userMention) {
     try {
       // Scrape codes from the website
       const scrapedCodes = await scrapeCodes();
+      console.log(scrapedCodes);
   
       // Compare and update database
       if (userPrompt) 
@@ -112,38 +144,76 @@ async function scrapeAndStoreCodes(channel, userPrompt, userMention) {
   async function scrapeCodes() {
     const response = await axios.get('https://www.eurogamer.net/genshin-impact-codes-livestream-active-working-how-to-redeem-9026');
     const $ = cheerio.load(response.data);
-    const codeElements = $('li strong');
-    return codeElements.map((index, element) => $(element).html()).get();
+
+    const codesWithDescriptions = [];
+
+    $('li').each((index, element) => {
+      const liText = $(element).html().trim();
+  
+      // Extract code from the <strong> tag
+      const codeMatch = liText.match(/<strong>(.*?)<\/strong>/);
+      const code = codeMatch ? codeMatch[1].trim() : '';
+  
+      // Extract description (text after <strong> tag)
+      const description = liText.replace(/<strong>.*?<\/strong>/, '').trim();
+  
+      if (code) {
+        codesWithDescriptions.push({ code, description });
+      }
+    });
+  
+    return codesWithDescriptions;
   }
   
   async function compareScrapeAndDatabase(scrapedCodes, channel, userPrompt, userMention) {
     try {
-      // Retrieve existing codes from the database
-      const existingCodes = await getAllCodesFromDatabase();
-  
-      // Find new codes to add to the database
-      const newCodes = scrapedCodes.filter(code => !existingCodes.includes(code));
-  
-      // Find expired codes to remove from the database
-      const expiredCodes = existingCodes.filter(code => !scrapedCodes.includes(code));
 
-    // Check if there are no new codes and no expired codes
-    if (newCodes.length === 0 && expiredCodes.length === 0) {
+      // Retrieve existing codes and descriptions from the database
+      const existingCodesAndDescriptions = await getAllCodesFromDatabase();
+
+      // Extract existing codes from the existingCodesAndDescriptions array
+      const existingCodes = existingCodesAndDescriptions.map(entry => entry.code);
+
+      // Extract existing descriptions from the existingCodesAndDescriptions array
+      const existingDescriptions = existingCodesAndDescriptions.map(entry => entry.description);
+
+      // Find new codes and descriptions to add to the database
+      const newCodesAndDescriptions = scrapedCodes.filter(entry => {
+      return !existingCodes.includes(entry.code) || !existingDescriptions.includes(entry.description);
+    });
+
+      // Find expired codes and descriptions to remove from the database
+      const expiredCodesAndDescriptions = existingCodesAndDescriptions.filter(entry => {
+      return !scrapedCodes.some(scrapedEntry =>
+      scrapedEntry.code === entry.code && scrapedEntry.description === entry.description
+      );
+    });
+
+      // Extract only the codes from newCodesAndDescriptions
+      const newCodes = newCodesAndDescriptions.map(entry => entry.code);
+
+      // Extract only the codes from expiredCodesAndDescriptions
+      const expiredCodes = expiredCodesAndDescriptions.map(entry => entry.code);
+
+
+      // Check if there are no new codes and no expired codes
+      if (newCodes.length === 0 && expiredCodes.length === 0) {
         if (userPrompt) {
-          channel.send('Codes are up to date. No changes needed.');
+          channel.send('Codes are up to date.');
           return;
         }
         return;
       }
   
       // Add new codes to the database
-      await Promise.all(newCodes.map(async (code) => {
-        await storeCodeInDatabase(code);
+      await Promise.all(newCodesAndDescriptions.map(async ({ code, description }) => {
+      await storeCodeInDatabase(code, description);
       }));
+
   
       // Remove expired codes from the database
-      await Promise.all(expiredCodes.map(async (code) => {
-        await removeCodeFromDatabase(code);
+      await Promise.all(expiredCodesAndDescriptions.map(async ({code, description}) => {
+        await removeCodeFromDatabase(code, description);
       }));
 
       //Announce to the discord server there are new codes.
@@ -164,12 +234,12 @@ async function scrapeAndStoreCodes(channel, userPrompt, userMention) {
       {
         if (userPrompt) 
         {
-          const formattedCodes = newCodes.map(code => `• **${code}**`).join('\n');
+          const formattedCodes = newCodesAndDescriptions.map(entry => `• **${entry.code}** ${entry.description}`).join('\n');
           const message = `${userMention} There are multiple new PROMO codes for Genshin!\n${formattedCodes}`;
           channel.send(message);
         } else 
         {
-          const formattedCodes = newCodes.map(code => `• **${code}**`).join('\n');
+          const formattedCodes = newCodesAndDescriptions.map(entry => `• **${entry.code}** ${entry.description}`).join('\n');
           const message = `${mentionRole} There are multiple new PROMO codes for Genshin!\n${formattedCodes}`;
           channel.send(message);
         }
@@ -181,35 +251,47 @@ async function scrapeAndStoreCodes(channel, userPrompt, userMention) {
     }
   }
 
-// Function to store a code in the SQLite database
-function storeCodeInDatabase(code) {
-  database.run('INSERT INTO codes (code) VALUES (?)', [code], (err) => {
+// Function to store a code and description in the SQLite database
+function storeCodeInDatabase(code, description) {
+  database.run('INSERT INTO codes (code, description) VALUES (?, ?)', [code, description], (err) => {
     if (err) {
-      console.error('Error storing code in database:', err.message);
+      console.error('Error storing code and description in database:', err.message);
     }
   });
 }
 
-// Function to retrieve all codes from the database
-function getAllCodesFromDatabase() {
-    return new Promise((resolve, reject) => {
-      database.all('SELECT code FROM codes', (err, rows) => {
-        if (err) {
-          reject(err);
-        } else {
-          const codes = rows.map(row => row.code);
-          resolve(codes);
-        }
-      });
+
+// Function to remove a code from the database
+function removeCodeFromDatabase(code, description) {
+  return new Promise((resolve, reject) => {
+    database.run('DELETE FROM codes WHERE code = ?', [code, description], (err) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve();
+      }
     });
-  }
+  });
+}
+
+// Function to retrieve all codes and descriptions from the database
+function getAllCodesFromDatabase() {
+  return new Promise((resolve, reject) => {
+    database.all('SELECT code, description FROM codes', (err, rows) => {
+      if (err) {
+        reject(err);
+      } else {
+        const codesAndDescriptions = rows.map(row => ({ code: row.code, description: row.description }));
+        resolve(codesAndDescriptions);
+      }
+    });
+  });
+}
 
 // SQLite database setup
 database.serialize(() => {
-  database.run('CREATE TABLE IF NOT EXISTS codes (id INTEGER PRIMARY KEY, code TEXT NOT NULL)');
+  database.run('CREATE TABLE IF NOT EXISTS codes (id INTEGER PRIMARY KEY, code TEXT NOT NULL, description TEXT)');
 });
-
-
 
 // Replace 'YOUR_BOT_TOKEN' with your actual bot token
 client.login(BOT_TOKEN);
