@@ -14,8 +14,15 @@ The Genshin Code Finder Discord bot is a tool designed to automatically fetch an
 
 ### Prerequisites
 
-- Node.js
+- [Node.js](https://nodejs.org/)
 - npm (Node Package Manager)
+
+### Dependencies
+
+
+- [Discord.js](https://discord.js.org/)
+- [Cheerio](https://cheerio.js.org/)
+- [Axios](https://axios-http.com/)
 
 ### Installation
 
