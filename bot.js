@@ -3,7 +3,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const sqlite3 = require('sqlite3').verbose();
 
-const BOT_TOKEN = 'MTIwMTk0NzAxNDk2MzY1ODg1Mg.GSDI1U.bZYSTLGrkv5XCyu9HC3aoK4pGqf_pLlC7Hlhlc';
+const BOT_TOKEN = 'YOUR_BOT_TOKEN';
 
 const { Client, GatewayIntentBits } = require('discord.js'); //Initializes the Discord bot
 const client = new Discord.Client({ 
@@ -22,39 +22,59 @@ client.on('ready', () => {
 });
 
 
-// Function to scrape codes from the website and store them in the database
 async function scrapeAndStoreCodes(channel) {
-  try {
-    // Make a request to the website
-    const response = await axios.get('https://www.eurogamer.net/genshin-impact-codes-livestream-active-working-how-to-redeem-9026');
-
-      // Log the HTML content for inspection
-      //console.log(response.data);
-    
-    // Load the HTML content using cheerio
-    const $ = cheerio.load(response.data);
-
-    // Select the HTML elements containing the codes
-    const codeElements = $('li strong');
-
-    // Extract codes from the list items
-    const codes = codeElements.map((index, element) => $(element).html()).get();
-
-    // Log the extracted codes for inspection
-    console.log('Extracted codes:', codes);
-
-    // Store codes in the database
-    codes.forEach((code) => {
-      storeCodeInDatabase(code);
-    });
-
-    // Notify the channel about the successful code scrape
-    channel.send(`Scraped ${codes.length} codes and stored them in the database.`);
-  } catch (error) {
-    console.error('Error scraping codes:', error.message);
-    channel.send('An error occurred while scraping codes. Please try again later.');
+    try {
+      // Scrape codes from the website
+      const scrapedCodes = await scrapeCodes();
+  
+      // Compare and update database
+      await compareScrapeAndDatabase(scrapedCodes, channel);
+    } catch (error) {
+      console.error('Error scraping and storing codes:', error.message);
+      channel.send('An error occurred while scraping and storing codes. Please try again later.');
+    }
   }
-}
+  
+  async function scrapeCodes() {
+    const response = await axios.get('https://www.eurogamer.net/genshin-impact-codes-livestream-active-working-how-to-redeem-9026');
+    const $ = cheerio.load(response.data);
+    const codeElements = $('li strong');
+    return codeElements.map((index, element) => $(element).html()).get();
+  }
+  
+  async function compareScrapeAndDatabase(scrapedCodes, channel) {
+    try {
+      // Retrieve existing codes from the database
+      const existingCodes = await getAllCodesFromDatabase();
+  
+      // Find new codes to add to the database
+      const newCodes = scrapedCodes.filter(code => !existingCodes.includes(code));
+  
+      // Find expired codes to remove from the database
+      const expiredCodes = existingCodes.filter(code => !scrapedCodes.includes(code));
+
+    // Check if there are no new codes and no expired codes
+    if (newCodes.length === 0 && expiredCodes.length === 0) {
+        channel.send('Codes are up to date. No changes needed.');
+        return;
+      }
+  
+      // Add new codes to the database
+      await Promise.all(newCodes.map(async (code) => {
+        await storeCodeInDatabase(code);
+      }));
+  
+      // Remove expired codes from the database
+      await Promise.all(expiredCodes.map(async (code) => {
+        await removeCodeFromDatabase(code);
+      }));
+  
+      channel.send(`Comparison complete. Added ${newCodes.length} new codes and removed ${expiredCodes.length} expired codes.`);
+    } catch (error) {
+      console.error('Error comparing and updating codes:', error.message);
+      channel.send('An error occurred while comparing and updating codes. Please try again later.');
+    }
+  }
 
 // Function to store a code in the SQLite database
 function storeCodeInDatabase(code) {
@@ -64,6 +84,20 @@ function storeCodeInDatabase(code) {
     }
   });
 }
+
+// Function to retrieve all codes from the database
+function getAllCodesFromDatabase() {
+    return new Promise((resolve, reject) => {
+      database.all('SELECT code FROM codes', (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          const codes = rows.map(row => row.code);
+          resolve(codes);
+        }
+      });
+    });
+  }
 
 // SQLite database setup
 database.serialize(() => {
