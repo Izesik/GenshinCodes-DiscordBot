@@ -3,9 +3,10 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const sqlite3 = require('sqlite3').verbose();
 const fs = require('node:fs');
+const schedule = require('node-schedule');
 const path = require('node:path');
 
-const BOT_TOKEN = 'TOKEN';
+const BOT_TOKEN = '';
 
 const { Client, GatewayIntentBits, Collection, Events } = require('discord.js'); //Initializes the Discord bot
 const client = new Discord.Client({ 
@@ -68,6 +69,29 @@ client.on('ready', () => {
   console.log(`Logged in as ${client.user.tag}!`);
 });
 
+//lets assign the default role and channel
+client.on('guildCreate', async (guild) => {
+  // Check if the default channel and role are not set
+  if (!config.channel || !config.announcementRole) {
+    // Get the default channel and role from the guild (you can customize this logic)
+    const defaultChannel = guild.channels.cache.find(channel => channel.type === 'text');
+    const defaultRole = guild.roles.cache.find(role => role.name === 'everyone');
+
+    // Update the configuration with default values
+    config.channel = defaultChannel ? defaultChannel.id : null;
+    config.announcementRole = defaultRole ? defaultRole.id : null;
+
+    console.log(`Default channel and role set for guild ${guild.name}`);
+  }
+});
+
+const dailyJob = schedule.scheduleJob('00 13 * * *', async () => {
+  console.log('Running daily scrape and store command...');
+  // Call your scrape and store function here
+  await scrapeAndStoreCodes(client.channels.cache.get(config.channel), false, '1234');
+  console.log('Daily scrape and store completed.');
+});
+
 const config = require('./config'); 
 
 //#region Command Interactions
@@ -83,7 +107,7 @@ client.on('interactionCreate', async (interaction) => {
     const user = interaction.user;
     const userMention = `<@${user.id}>`;
 
-    scrapeAndStoreCodes(client.channels.cache.get('1203485910604316733'), true, userMention);
+    scrapeAndStoreCodes(client.channels.cache.get(config.channel), true, userMention);
     interaction.reply(`Checking for codes...`);
   }
 
@@ -124,7 +148,6 @@ async function scrapeAndStoreCodes(channel, userPrompt, userMention) {
     try {
       // Scrape codes from the website
       const scrapedCodes = await scrapeCodes();
-      console.log(scrapedCodes);
   
       // Compare and update database
       if (userPrompt) 
@@ -217,8 +240,9 @@ async function scrapeAndStoreCodes(channel, userPrompt, userMention) {
       }));
 
       //Announce to the discord server there are new codes.
-      const genshinRole = config.getRole(channel.guild.id) || '1203602424158228532'; //The discord role that will be alerted of the codes.
+      const genshinRole = config.announcementRole || '1203602424158228532'; //The discord role that will be alerted of the codes.
       const mentionRole = `<@&${genshinRole}>`;
+      //if a user prompted the commmand, lets @ them if not lets @ the selected announcementrole.
       if (newCodes.length == 1) 
       {
         if (userPrompt) 
@@ -232,6 +256,7 @@ async function scrapeAndStoreCodes(channel, userPrompt, userMention) {
         }
       } else if (newCodes.length > 1) 
       {
+        
         if (userPrompt) 
         {
           const formattedCodes = newCodesAndDescriptions.map(entry => `• **${entry.code}** ${entry.description}`).join('\n');

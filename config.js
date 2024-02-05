@@ -11,4 +11,8 @@ function setRole(serverId, roleId) {
 module.exports = {
   getRole,
   setRole,
+  announcementRole: null,
+  channel: null,
 };
+
+
