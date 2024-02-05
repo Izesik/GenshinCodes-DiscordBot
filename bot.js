@@ -5,8 +5,7 @@ const sqlite3 = require('sqlite3').verbose();
 const fs = require('node:fs');
 const schedule = require('node-schedule');
 const path = require('node:path');
-
-const BOT_TOKEN = '';
+const configjson = require ('./config.json');
 
 const { Client, GatewayIntentBits, Collection, Events } = require('discord.js'); //Initializes the Discord bot
 const client = new Discord.Client({ 
@@ -319,4 +318,4 @@ database.serialize(() => {
 });
 
 // Replace 'YOUR_BOT_TOKEN' with your actual bot token
-client.login(BOT_TOKEN);
+client.login(configjson.token);
