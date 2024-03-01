@@ -1,4 +1,5 @@
 const Discord = require('discord.js');
+const { Permissions, PermissionsBitField } = require('discord.js');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const sqlite3 = require('sqlite3').verbose();
@@ -6,6 +7,8 @@ const fs = require('node:fs');
 const schedule = require('node-schedule');
 const path = require('node:path');
 const configjson = require ('./config.json');
+
+const TOKEN = 'YOUR_TOKEN_HERE';
 
 const { Client, GatewayIntentBits, Collection, Events } = require('discord.js'); //Initializes the Discord bot
 const client = new Discord.Client({ 
@@ -63,13 +66,21 @@ client.on(Events.InteractionCreate, async interaction => {
 //#endregion
 
 const database = new sqlite3.Database('codes.db');
+const discordIdDatabase = new sqlite3.Database('discordID.db');
 
 client.on('ready', () => {
   console.log(`Logged in as ${client.user.tag}!`);
 });
 
-//lets assign the default role and channel
+//let's store the current guild and create generic channel and mention role ids 
 client.on('guildCreate', async (guild) => {
+
+  const ids = await getIDsFromDatabase(); //lets grab all the current ids from the id database. 
+
+  //lets see if this guild is already in the database
+  storeGuildIDinDatabase(guild.id);
+
+
   // Check if the default channel and role are not set
   if (!config.channel || !config.announcementRole) {
     // Get the default channel and role from the guild (you can customize this logic)
@@ -84,19 +95,33 @@ client.on('guildCreate', async (guild) => {
   }
 });
 
+//The daily job will send a message to every server the bot is apart of.
 const dailyJob = schedule.scheduleJob('00 13 * * *', async () => {
   console.log('Running daily scrape and store command...');
-  // Call your scrape and store function here
-  await scrapeAndStoreCodes(client.channels.cache.get(config.channel), false, '1234');
-  console.log('Daily scrape and store completed.');
+
+  // Retrieve channel IDs from the database
+  const channelIDs = await getAllChannelIDsFromDatabase();
+
+  for (const channelID of channelIDs) {
+    try {
+        // Call your scrape and store function for each channel
+        await scrapeAndStoreCodes(client.channels.cache.get(channelID), false, '1234');
+        console.log(`Scrape and store completed for channel ${channelID}`);
+    } catch (error) {
+        console.error(`Error occurred while processing channel ${channelID}:`, error.message);
+    }
+  }
+  console.log('Daily scrape and store completed for all channels.');
 });
 
-const config = require('./config'); 
+const exp = require('node:constants');
 
 //#region Command Interactions
 //Handles Command Interaction events.
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isCommand()) return;
+
+  const guildID = interaction.guildId;
 
   const { commandName } = interaction;
 
@@ -106,7 +131,9 @@ client.on('interactionCreate', async (interaction) => {
     const user = interaction.user;
     const userMention = `<@${user.id}>`;
 
-    scrapeAndStoreCodes(client.channels.cache.get(config.channel), true, userMention);
+    const channel = await getChannelIDFromGuild(guildID);
+
+    scrapeAndStoreCodes(channel, true, userMention, guildID);
     interaction.reply(`Checking for codes...`);
   }
 
@@ -140,10 +167,42 @@ client.on('interactionCreate', async (interaction) => {
     }
    
   }
+
+  if (commandName === 'setchannel') 
+  {
+    const guildRow = await getGuildSettingsFromDatabase(guildID);
+
+    // Check if the user has the necessary permissions (e.g., ADMINISTRATOR)
+    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return interaction.reply('You do not have permission to use this command.');
+    }
+
+    // Retrieve the selected channel from the interaction
+    const channelId = interaction.options.getChannel('channel');
+
+    await updateChannelIdInDatabase(guildID, channelId.id);
+    console.log(channelId);
+
+    interaction.reply(`Genshin Codes will now send alerts to ${channelId.name}`);
+  }
+
+  if (commandName === 'setrole') 
+  {
+      // Check if the user has the necessary permissions (e.g., ADMINISTRATOR)
+      if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        return interaction.reply('You do not have permission to use this command.');
+      }
+  
+      // Retrieve the selected role from the interaction
+      const role = interaction.options.getRole('role');
+
+      await updateRoleIdInDatabase(guildID, role.id);
+      interaction.reply(`Announcement role set to ${role.name}`);
+  }
 });
 //#endregion
 
-async function scrapeAndStoreCodes(channel, userPrompt, userMention) {
+async function scrapeAndStoreCodes(channel, userPrompt, userMention, guildId) {
     try {
       // Scrape codes from the website
       const scrapedCodes = await scrapeCodes();
@@ -151,10 +210,10 @@ async function scrapeAndStoreCodes(channel, userPrompt, userMention) {
       // Compare and update database
       if (userPrompt) 
       {
-        await compareScrapeAndDatabase(scrapedCodes, channel, true, userMention);
+        await compareScrapeAndDatabase(scrapedCodes, channel, true, userMention, guildId);
       } else if (!userPrompt) 
       {
-        await compareScrapeAndDatabase(scrapedCodes, channel, false, userMention);
+        await compareScrapeAndDatabase(scrapedCodes, channel, false, userMention, guildId);
       }
       
     } catch (error) {
@@ -187,9 +246,11 @@ async function scrapeAndStoreCodes(channel, userPrompt, userMention) {
     return codesWithDescriptions;
   }
   
-  async function compareScrapeAndDatabase(scrapedCodes, channel, userPrompt, userMention) {
+  async function compareScrapeAndDatabase(scrapedCodes, channel, userPrompt, userMention, guildId) {
+    
+    //gets the channel from the client using the given ChannelID
+    const discordChannel = await client.channels.fetch(channel);
     try {
-
       // Retrieve existing codes and descriptions from the database
       const existingCodesAndDescriptions = await getAllCodesFromDatabase();
 
@@ -216,12 +277,13 @@ async function scrapeAndStoreCodes(channel, userPrompt, userMention) {
 
       // Extract only the codes from expiredCodesAndDescriptions
       const expiredCodes = expiredCodesAndDescriptions.map(entry => entry.code);
+      console.log(expiredCodes);
 
 
       // Check if there are no new codes and no expired codes
       if (newCodes.length === 0 && expiredCodes.length === 0) {
         if (userPrompt) {
-          channel.send('Codes are up to date.');
+          discordChannel.send('Codes are up to date.');
           return;
         }
         return;
@@ -239,7 +301,7 @@ async function scrapeAndStoreCodes(channel, userPrompt, userMention) {
       }));
 
       //Announce to the discord server there are new codes.
-      const genshinRole = config.announcementRole || '1203602424158228532'; //The discord role that will be alerted of the codes.
+      const genshinRole = await getRoleIDFromGuild(guildId);
       const mentionRole = `<@&${genshinRole}>`;
       //if a user prompted the commmand, lets @ them if not lets @ the selected announcementrole.
       if (newCodes.length == 1) 
@@ -247,11 +309,11 @@ async function scrapeAndStoreCodes(channel, userPrompt, userMention) {
         if (userPrompt) 
         {
           const message = `${userMention} There is a new PROMO code for Genshin! The code is **${newCodes[0]}**.`;
-          channel.send(message);
+          discordChannel.send(message);
         } else 
         { 
           const message = `${mentionRole} There is a new PROMO code for Genshin! The code is **${newCodes[0]}**.`;
-          channel.send(message);
+          discordChannel.send(message);
         }
       } else if (newCodes.length > 1) 
       {
@@ -260,22 +322,22 @@ async function scrapeAndStoreCodes(channel, userPrompt, userMention) {
         {
           const formattedCodes = newCodesAndDescriptions.map(entry => `• **${entry.code}** ${entry.description}`).join('\n');
           const message = `${userMention} There are multiple new PROMO codes for Genshin!\n${formattedCodes}`;
-          channel.send(message);
+          discordChannel.send(message);
         } else 
         {
           const formattedCodes = newCodesAndDescriptions.map(entry => `• **${entry.code}** ${entry.description}`).join('\n');
           const message = `${mentionRole} There are multiple new PROMO codes for Genshin!\n${formattedCodes}`;
-          channel.send(message);
+          discordChannel.send(message);
         }
       }
       
     } catch (error) {
       console.error('Error comparing and updating codes:', error.message);
-      channel.send('An error occurred while comparing and updating codes. Please try again later.');
+      discordChannel.send('An error occurred while comparing and updating codes. Please try again later.');
     }
   }
 
-// Function to store a code and description in the SQLite database
+// stores code(s) and description(s) in the SQLite database
 function storeCodeInDatabase(code, description) {
   database.run('INSERT INTO codes (code, description) VALUES (?, ?)', [code, description], (err) => {
     if (err) {
@@ -283,12 +345,10 @@ function storeCodeInDatabase(code, description) {
     }
   });
 }
-
-
-// Function to remove a code from the database
+// Removes code(s) from the database
 function removeCodeFromDatabase(code, description) {
   return new Promise((resolve, reject) => {
-    database.run('DELETE FROM codes WHERE code = ?', [code, description], (err) => {
+    database.run('DELETE FROM codes WHERE code = ? AND description = ?', [code, description], (err) => {
       if (err) {
         reject(err);
       } else {
@@ -298,7 +358,112 @@ function removeCodeFromDatabase(code, description) {
   });
 }
 
-// Function to retrieve all codes and descriptions from the database
+// Stores GuildID into the discordID database
+function storeGuildIDinDatabase(guildID) 
+{
+  discordIdDatabase.run('INSERT INTO discordId (guildId) VALUES (?)', [guildID], (err) => {
+    if (err) {
+      console.error('Error storing guild ID in database: ', err.message);
+    }
+  });
+}
+// Retrieves guild settings from the database based on guild ID
+async function getGuildSettingsFromDatabase(guildId) {
+  return new Promise((resolve, reject) => {
+      // Perform database query to select settings based on guild ID
+      discordIdDatabase.get('SELECT * FROM discordID WHERE guildId = ?', [guildId], (err, row) => {
+          if (err) {
+              reject(err); // Reject promise if there's an error
+          } else {
+              resolve(row); // Resolve promise with row data
+          }
+      });
+  });
+}
+// Retrieves channel ID from the database based on guild ID
+async function getChannelIDFromGuild(guildId) {
+  return new Promise((resolve, reject) => {
+      // Perform database query to select channel ID based on guild ID
+      discordIdDatabase.get('SELECT channelId FROM discordID WHERE guildId = ?', [guildId], (err, row) => {
+          if (err) {
+              reject(err); // Reject promise if there's an error
+          } else {
+              if (row) {
+                  resolve(row.channelId); // Resolve promise with channel ID
+              } else {
+                  resolve(null); // Resolve with null if no matching row is found
+              }
+          }
+      });
+  });
+}
+async function getAllChannelIDsFromDatabase() {
+  return new Promise((resolve, reject) => { 
+    discordIdDatabase.all('SELECT channelId FROM discordID', (err, rows) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve(rows.channelId);
+      }
+    });
+  });
+}
+async function getRoleIDFromGuild(guildId) {
+  return new Promise((resolve, reject) => {
+    // Perform database query to select channel ID based on guild ID
+    discordIdDatabase.get('SELECT mentionRoleId FROM discordID WHERE guildId = ?', [guildId], (err, row) => {
+        if (err) {
+            reject(err); // Reject promise if there's an error
+        } else {
+            if (row) {
+                resolve(row.mentionRoleId); // Resolve promise with channel ID
+            } else {
+                resolve(null); // Resolve with null if no matching row is found
+            }
+        }
+    });
+});
+}
+// Updates channel ID in the database for a specific guild ID
+async function updateChannelIdInDatabase(guildId, channelId) {
+  return new Promise((resolve, reject) => {
+      // Perform database query to update channel ID based on guild ID
+      discordIdDatabase.run('UPDATE discordID SET channelId = ? WHERE guildId = ?', [channelId, guildId], function(err) {
+          if (err) {
+              reject(err); // Reject promise if there's an error
+          } else {
+              resolve(); // Resolve promise if update is successful
+          }
+      });
+  });
+}
+// Updates role ID in the database for a specific guild ID
+async function updateRoleIdInDatabase(guildId, roleId) {
+  return new Promise((resolve, reject) => {
+      // Perform database query to update channel ID based on guild ID
+      discordIdDatabase.run('UPDATE discordID SET mentionRoleId = ? WHERE guildId = ?', [roleId, guildId], function(err) {
+          if (err) {
+              reject(err); // Reject promise if there's an error
+          } else {
+              resolve(); // Resolve promise if update is successful
+          }
+      });
+  });
+}
+function getIDsFromDatabase() {
+  return new Promise((resolve, reject) => { 
+    discordIdDatabase.all('SELECT guildId, channelId, mentionRoleId FROM discordID', (err, rows) => {
+      if (err) {
+        reject(err);
+      } else {
+        const ids = rows.map(row => ({ channelId: row.channelId, mentionRoleId: row.mentionRoleId}));
+        resolve(ids);
+      }
+    });
+  });
+
+}
+// Retrieves all codes and descriptions from the database
 function getAllCodesFromDatabase() {
   return new Promise((resolve, reject) => {
     database.all('SELECT code, description FROM codes', (err, rows) => {
@@ -317,5 +482,11 @@ database.serialize(() => {
   database.run('CREATE TABLE IF NOT EXISTS codes (id INTEGER PRIMARY KEY, code TEXT NOT NULL, description TEXT)');
 });
 
+// SQLite Discord ID Database setup
+discordIdDatabase.serialize(() => {
+  discordIdDatabase.run(`
+    CREATE TABLE IF NOT EXISTS discordID (guildId INTEGER PRIMARY KEY, channelId TEXT, mentionRoleId TEXT)`);
+});
+
 // Replace 'YOUR_BOT_TOKEN' with your actual bot token
-client.login(configjson.token);
+client.login(TOKEN);
