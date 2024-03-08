@@ -1,5 +1,5 @@
 {
-  "name": "genshincodes",
+  "name": "genshincodes-discordbot",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
@@ -11,6 +11,8 @@
   "license": "ISC",
   "dependencies": {
     "axios": "^1.6.7",
+    "bigint-buffer": "^1.1.5",
+    "bigint-json": "^1.1.5",
     "cheerio": "^1.0.0-rc.12",
     "discord.js": "^14.14.1",
     "node-schedule": "^2.1.1",
