@@ -12,7 +12,6 @@ const exp = require('node:constants');
 
 
 const TOKEN = DiscordBot.TOKEN;
-console.log(TOKEN);
 
 const { Client, GatewayIntentBits, Collection, Events } = require('discord.js'); //Initializes the Discord bot
 const client = new Discord.Client({ 
@@ -124,11 +123,15 @@ client.on('interactionCreate', async (interaction) => {
   if (commandName === 'latestcode') 
   {
     const codes = await getAllCodesFromDatabase();
+    console.log(codes);
     
     if (codes.length > 0) 
     {
       const latestCode = codes[0];
-      interaction.reply(`The latest code for Genshin Impact is: **${latestCode.code}** ${latestCode.description}`);
+      const reply = `**${latestCode.code}** ${latestCode.description}`;
+      const Embed = CreateEmbed("LATEST GENSHIN IMPACT PROMO CODE", " ", " ", reply);
+
+      interaction.reply({embeds: [Embed]});
   
     } else 
     {
@@ -140,9 +143,25 @@ client.on('interactionCreate', async (interaction) => {
   if (commandName === 'activecodes') 
   {
     const codes = await getAllCodesFromDatabase();
-    const formattedCodes = codes.map(entry => `• **${entry.code}** ${entry.description}`).join('\n');
 
-    const Embed = CreateEmbed("ALL CURRENTLY ACTIVE PROMO CODES FOR GENSHIN IMPACT", " ", "CODES", formattedCodes)
+    const regularCodes = codes
+          .filter(entry => entry.isLivestream === 0)
+          .map(entry => `• **${entry.code}** ${entry.description}`)
+          .join('\n');
+      
+      // Filter and format livestream codes
+      const livestreamCodes = codes
+          .filter(entry => entry.isLivestream === 1)
+          .map(entry => `• **${entry.code}** ${entry.description}`)
+          .join('\n');
+      
+      // Check if there are regular codes and livestream codes to display
+      let fieldValue = ' ';
+      if (regularCodes) fieldValue += '\n\n'+ regularCodes;
+      if (regularCodes && livestreamCodes) fieldValue += '\n\n';  // Add space if both exist
+      if (livestreamCodes) fieldValue += '**Active Livestream Codes (Limited Supply):**\n\n' + livestreamCodes;
+
+    const Embed = CreateEmbed("ALL CURRENTLY ACTIVE PROMO CODES FOR GENSHIN IMPACT", " ", "Active Codes:\n", fieldValue)
 
     if (codes.length > 0) 
     {
@@ -152,6 +171,13 @@ client.on('interactionCreate', async (interaction) => {
       interaction.reply(`There are currently no promo codes for Genshin Impact. Please check back later.`)
     }
    
+  }
+
+  if (commandName === 'redeem') 
+  {
+    const Embed = CreateEmbed("**HOW TO REDEEM PROMO CODES FOR GENSHIN IMPACT**", "An easy guide to get those rewards onto your account", " ", 
+                              "**Step 1:** Obtain Adventure Rank 10\n**Step 2:** Go to the [Genshin Website](https://genshin.hoyoverse.com/en/gift) and log in\n**Step 3:** Select your server, type in your character name, input the promo code and press Redeem\n**Step 4:** Go to your in-game mail and claim the rewards!");
+    interaction.reply({embeds: [Embed]});
   }
 
   if (commandName === 'setchannel') 
@@ -167,7 +193,6 @@ client.on('interactionCreate', async (interaction) => {
     const channelId = interaction.options.getChannel('channel');
 
     await updateChannelIdInDatabase(guildID, channelId.id);
-    console.log(channelId);
 
     interaction.reply(`Genshin Codes will now send alerts to ${channelId.name}`);
   }
@@ -188,176 +213,215 @@ client.on('interactionCreate', async (interaction) => {
 });
 //#endregion
 //#region BOT LOGIC
-  async function scrapeCodes() {
-    const response = await axios.get(DiscordBot.WEBSITE);
-    const $ = cheerio.load(response.data);
+async function scrapeCodes() {
+  const response = await axios.get(DiscordBot.WEBSITE);
+  const $ = cheerio.load(response.data);
 
-    const codesWithDescriptions = [];
+  const codesWithDescriptions = [];
+  const livestreamCodesWithDescriptions = [];
 
-    $('li').each((index, element) => {
-      const liText = $(element).html().trim();
-  
-      // Extract code from the <strong> tag
-      const codeMatch = liText.match(/<strong>(.*?)<\/strong>/);
-      const code = codeMatch ? codeMatch[1].trim() : '';
-  
-      // Extract description (text after <strong> tag)
-      const description = liText.replace(/<strong>.*?<\/strong>/, '').trim();
-  
-      if (code) {
-        codesWithDescriptions.push({ code, description });
-      }
-    });
-  
-    return codesWithDescriptions;
-  }
-  
-  async function updateCodes(userPrompt) {
+  $('h2').each((index, element) => {
+    const h2Text = $(element).text().trim();
     
-    const scrapedCodes = await scrapeCodes();
-
-    try {
-      // Retrieve existing codes and descriptions from the database
-      const existingCodesAndDescriptions = await getAllCodesFromDatabase();
-
-      // Extract existing codes from the existingCodesAndDescriptions array
-      const existingCodes = existingCodesAndDescriptions.map(entry => entry.code);
-
-      // Extract existing descriptions from the existingCodesAndDescriptions array
-      const existingDescriptions = existingCodesAndDescriptions.map(entry => entry.description);
-
-      // Find new codes and descriptions to add to the database
-      const newCodesAndDescriptions = scrapedCodes.filter(entry => {
-      return !existingCodes.includes(entry.code) || !existingDescriptions.includes(entry.description);
-    });
-
-      // Find expired codes and descriptions to remove from the database
-      const expiredCodesAndDescriptions = existingCodesAndDescriptions.filter(entry => {
-      return !scrapedCodes.some(scrapedEntry =>
-      scrapedEntry.code === entry.code && scrapedEntry.description === entry.description
-      );
-    });
-
-      // Extract only the codes from newCodesAndDescriptions
-      const newCodes = newCodesAndDescriptions.map(entry => entry.code);
-
-      // Extract only the codes from expiredCodesAndDescriptions
-      const expiredCodes = expiredCodesAndDescriptions.map(entry => entry.code);
-      console.log(expiredCodes);
-
-
-      // Check if there are no new codes and no expired codes
-      if (newCodes.length === 0 && expiredCodes.length === 0) {
-        if (userPrompt) {
-            // Return an object with the relevant information
-            return {
-                title: 'Genshin Codes Bot',
-                description: '#1 Source for the latest Genshin Codes!',
-                fieldTitle: '**CODES**',
-                fieldValue: 'There are no new codes at this time.',
-                newcodes: 0
-            };
-        }
-        // Return undefined if userPrompt is false
-        return;
-    }
-      // Add new codes to the database
-      await Promise.all(newCodesAndDescriptions.map(async ({ code, description }) => {
-      await storeCodeInDatabase(code, description);
-      }));
-
+    // Directly get the next 'ul' 
+    const ul = $(element).nextAll('ul').first();
   
-      // Remove expired codes from the database
-      await Promise.all(expiredCodesAndDescriptions.map(async ({code, description}) => {
-      await removeCodeFromDatabase(code, description);
-      }));
+    // Check if the current h2 text indicates regular or livestream codes
+    if (h2Text.includes('Genshin Impact codes')) {
+      ul.find('li').each((liIndex, liElement) => {
+        const liText = $(liElement).html().trim();
+        const codeMatch = liText.match(/<strong>(.*?)<\/strong>/);
+        const code = codeMatch ? codeMatch[1].trim() : '';
+        const description = liText.replace(/<strong>.*?<\/strong>/, '').trim();
+        
+        if (code) {
+          codesWithDescriptions.push({ code, description });
+        }
+      });
+    } else if (h2Text.includes('livestream codes')) {
+      ul.find('li').each((liIndex, liElement) => {
+        const liText = $(liElement).html().trim();
+        const codeMatch = liText.match(/<strong>(.*?)<\/strong>/);
+        const code = codeMatch ? codeMatch[1].trim() : '';
+        const description = liText.replace(/<strong>.*?<\/strong>/, '').trim();
+        
+        if (code) {
+          livestreamCodesWithDescriptions.push({ code, description });
+        }
+      });
+    }
+  });
 
-      //Generate Embed object fields for the Embed message.
-      if (newCodes.length == 1) 
-      {
-        return {
-          title: '**🚨NEW CODE ALERT**',
-          description: 'There is a new PROMO code for Genshin!',
-          fieldTitle: '**CODES**',
-          fieldValue: `The code is **${newCodesAndDescriptions[0].code}** ${newCodesAndDescriptions[0].description}.`,
-          newcodes: 1
-        };
-      } else if (newCodes.length > 1) 
-      {
-          const formattedCodes = newCodesAndDescriptions.map(entry => `• **${entry.code}** ${entry.description}`).join('\n');
+  return {
+    regularCodes: codesWithDescriptions,
+    livestreamCodes: livestreamCodesWithDescriptions
+  };
+}
+async function updateCodes(userPrompt) {
+  
+  const scrapedCodes = await scrapeCodes();
+
+  //merge the codes into one list and create a property to differenciate them as livestream or not.
+  const allCodes = [
+    ...scrapedCodes.regularCodes.map(code => ({...code, isLivestream: 0})),
+    ...scrapedCodes.livestreamCodes.map(code => ({...code, isLivestream: 1}))
+  ];
+
+  try {
+    // Retrieve existing codes and descriptions from the database
+    const existingCodesAndDescriptions = await getAllCodesFromDatabase();
+
+    // Extract existing codes from the existingCodesAndDescriptions array
+    const existingCodes = existingCodesAndDescriptions.map(entry => entry.code);
+
+    // Extract existing descriptions from the existingCodesAndDescriptions array
+    const existingDescriptions = existingCodesAndDescriptions.map(entry => entry.description);
+
+    // Find new codes and descriptions to add to the database
+    const newCodesAndDescriptions = allCodes.filter(entry => {
+    return !existingCodes.includes(entry.code) || !existingDescriptions.includes(entry.description);
+  });
+
+    // Find expired codes and descriptions to remove from the database
+    const expiredCodesAndDescriptions = existingCodesAndDescriptions.filter(entry => {
+    return !allCodes.some(scrapedEntry =>
+    scrapedEntry.code === entry.code && scrapedEntry.description === entry.description
+    );
+  });
+
+    // Extract only the codes from newCodesAndDescriptions
+    const newCodes = newCodesAndDescriptions.map(entry => entry.code);
+
+    // Extract only the codes from expiredCodesAndDescriptions
+    const expiredCodes = expiredCodesAndDescriptions.map(entry => entry.code);
+    console.log(expiredCodes);
+
+
+    // Check if there are no new codes and no expired codes
+    if (newCodes.length === 0 && expiredCodes.length === 0) {
+      if (userPrompt) {
+          // Return an object with the relevant information
           return {
-            title: '**🚨NEW CODES ALERT**',
-            description: 'There are multiple new PROMO codes for Genshin!!',
-            fieldTitle: '**NEW CODES**',
-            fieldValue: `\n${formattedCodes}`,
-            newcodes: 1
+              title: 'NO NEW CODES',
+              description: 'All codes are up to date!',
+              fieldTitle: ' ',
+              fieldValue: ' ',
+              newcodes: 0
           };
       }
-      
-    } catch (error) {
-      console.error('Error comparing and updating codes:', error.message);
-      discordChannel.send('An error occurred while comparing and updating codes. Please try again later.');
-    }
+      // Return undefined if userPrompt is false
+      return;
   }
+    // Add new codes to the database
+    await Promise.all(newCodesAndDescriptions.map(async ({ code, description, isLivestream}) => {
+    await storeCodeInDatabase(code, description, isLivestream);
+    }));
 
-  async function sendAlert(EmbedDetails, channelToIgnore=null) {
-     // Retrieve channel IDs from the database
-    const idDatabase = await getIDsFromDatabase();
-    console.log(idDatabase)
 
-    for (const entry of idDatabase) {
+    // Remove expired codes from the database
+    await Promise.all(expiredCodesAndDescriptions.map(async ({code, description}) => {
+    await removeCodeFromDatabase(code, description);
+    }));
 
-      if (channelToIgnore != null) {
-        console.log("Channel To Ignore: ", channelToIgnore)
-        if (entry.channelId == channelToIgnore) {
-          continue;
-        }
+    //Generate Embed object fields for the Embed message.
+    if (newCodes.length == 1) 
+    {
+      return {
+        title: '**🚨NEW CODE ALERT**',
+        description: 'There is a new PROMO code for Genshin!',
+        fieldTitle: '**CODES**',
+        fieldValue: `The code is **${newCodesAndDescriptions[0].code}** ${newCodesAndDescriptions[0].description}.`,
+        newcodes: 1
+      };
+    } else if (newCodes.length > 1) 
+    {
+      const regularCodes = newCodesAndDescriptions
+        .filter(entry => entry.isLivestream === 0)
+        .map(entry => `• **${entry.code}** ${entry.description}`)
+        .join('\n');
+    
+      // Filter and format livestream codes
+      const livestreamCodes = newCodesAndDescriptions
+        .filter(entry => entry.isLivestream === 1)
+        .map(entry => `• **${entry.code}** ${entry.description}`)
+        .join('\n');
+    
+      // Check if there are regular codes and livestream codes to display
+      let fieldValue = '';
+      if (regularCodes) fieldValue += '**NEW:**\n\n' + regularCodes;
+      if (regularCodes && livestreamCodes) fieldValue += '\n\n';  // Add space if both exist
+      if (livestreamCodes) fieldValue += '**NEW LIVESTREAM CODES (Limited Supply):**\n\n' + livestreamCodes;
+        return {
+          title: '**🚨NEW CODES ALERT**',
+          description: 'There are multiple new PROMO codes for Genshin!!',
+          fieldTitle: ' ',
+          fieldValue: fieldValue,
+          newcodes: 1
+        };
+    }
+    
+  } catch (error) {
+    console.error('Error comparing and updating codes:', error.message);
+    discordChannel.send('An error occurred while comparing and updating codes. Please try again later.');
+  }
+}
+async function sendAlert(EmbedDetails, channelToIgnore=null) {
+    // Retrieve channel IDs from the database
+  const idDatabase = await getIDsFromDatabase();
+
+  for (const entry of idDatabase) {
+
+    if (channelToIgnore != null) {
+      console.log("Channel To Ignore: ", channelToIgnore)
+      if (entry.channelId == channelToIgnore) {
+        continue;
       }
-      const guildId = entry.guildId;
-      const mentionRole = entry.mentionRoleId;
-      const channelID = entry.channelId;
+    }
+    const guildId = entry.guildId;
+    const mentionRole = entry.mentionRoleId;
+    const channelID = entry.channelId;
 
-      try {
-        console.log(`Processing channel ID: ${channelID}`);
-        //Check if EmbedDetails returned anything, if not there are no new codes.
-        if (EmbedDetails) {
-          const Embed = CreateEmbed(EmbedDetails.title, EmbedDetails.description, EmbedDetails.fieldTitle, EmbedDetails.fieldValue)
-          const channel = client.channels.cache.get(channelID);
-          //Check if channel exists, if not lets set the channel to the guild's system channel.
-          if (channel) {
-            if (mentionRole) {
-              channel.send({content: `<@&${mentionRole}>`, embeds: [Embed]});
-            } else {
-              channel.send({embeds: [Embed]});
-            }
+    try {
+      console.log(`Processing channel ID: ${channelID}`);
+      //Check if EmbedDetails returned anything, if not there are no new codes.
+      if (EmbedDetails) {
+        const Embed = CreateEmbed(EmbedDetails.title, EmbedDetails.description, EmbedDetails.fieldTitle, EmbedDetails.fieldValue)
+        const channel = client.channels.cache.get(channelID);
+        //Check if channel exists, if not lets set the channel to the guild's system channel.
+        if (channel) {
+          if (mentionRole) {
+            channel.send({content: `<@&${mentionRole}>`, embeds: [Embed]});
           } else {
-            console.log (`Channel with ID ${channelID} not found, assigning channel to guild's system channel`);
-            let guild = client.guilds.cache.get(guildId);
-            //Check if guild or the guild's system channel exists, if not the bot must not be in that guild so let's remove it from the database.
-            if (guild && guild.systemChannel) 
-            {
-              guild.systemChannel.send({content: `<@&${mentionRole}>`, embeds: [Embed]});
-            } else {
-              console.log(`The guild ${guildId} was not found or has no system channel. Removing it from the database.`);
-              await removeGuildFromDatabase(guildId);
-            }
+            channel.send({embeds: [Embed]});
           }
         } else {
-          console.log('No new codes');
-          continue;
+          console.log (`Channel with ID ${channelID} not found, assigning channel to guild's system channel`);
+          let guild = client.guilds.cache.get(guildId);
+          //Check if guild or the guild's system channel exists, if not the bot must not be in that guild so let's remove it from the database.
+          if (guild && guild.systemChannel) 
+          {
+            guild.systemChannel.send({content: `<@&${mentionRole}>`, embeds: [Embed]});
+          } else {
+            console.log(`The guild ${guildId} was not found or has no system channel. Removing it from the database.`);
+            await removeGuildFromDatabase(guildId);
+          }
         }
-        console.log(`Scrape and store completed for channel ${channelID}`);
-      } catch (error) {
-          console.error(`Error occurred while processing channel ${channelID}:`, error.message);
+      } else {
+        console.log('No new codes');
+        continue;
       }
-  
+      console.log(`Scrape and store completed for channel ${channelID}`);
+    } catch (error) {
+        console.error(`Error occurred while processing channel ${channelID}:`, error.message);
     }
+
   }
+}
 //#endregion
 //#region DATABASE
 // stores code(s) and description(s) in the SQLite database
-function storeCodeInDatabase(code, description) {
-  database.run('INSERT INTO codes (code, description) VALUES (?, ?)', [code, description], (err) => {
+function storeCodeInDatabase(code, description, isLivestream) {
+  database.run('INSERT INTO codes (code, description, isLivestream) VALUES (?, ?, ?)', [code, description, isLivestream], (err) => {
     if (err) {
       console.error('Error storing code and description in database:', err.message);
     }
@@ -506,11 +570,11 @@ async function getIDsFromDatabase() {
 // Retrieves all codes and descriptions from the database
 function getAllCodesFromDatabase() {
   return new Promise((resolve, reject) => {
-    database.all('SELECT code, description FROM codes', (err, rows) => {
+    database.all('SELECT code, description, isLivestream FROM codes', (err, rows) => {
       if (err) {
         reject(err);
       } else {
-        const codesAndDescriptions = rows.map(row => ({ code: row.code, description: row.description }));
+        const codesAndDescriptions = rows.map(row => ({ code: row.code, description: row.description, isLivestream: row.isLivestream }));
         resolve(codesAndDescriptions);
       }
     });
@@ -519,7 +583,7 @@ function getAllCodesFromDatabase() {
 
 // SQLite database setup
 database.serialize(() => {
-  database.run('CREATE TABLE IF NOT EXISTS codes (id INTEGER PRIMARY KEY, code TEXT NOT NULL, description TEXT)');
+  database.run('CREATE TABLE IF NOT EXISTS codes (id INTEGER PRIMARY KEY, code TEXT NOT NULL, description TEXT, isLivestream INTEGER)');
 });
 
 // SQLite Discord ID Database setup
@@ -528,6 +592,4 @@ discordIdDatabase.serialize(() => {
 });
 
 //#endregion
-
-
 client.login(TOKEN);
